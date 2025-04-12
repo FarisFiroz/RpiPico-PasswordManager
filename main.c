@@ -230,14 +230,14 @@ void programmer(uint32_t btn) {
 
   char s[4096];
   int i=0;
-  while(btn == btn2) {
+  while(1) {
     s[i] = uart_getc(UART_ID);
-    btn2 = (gpio_get(0));
-    for(int i=1; i<numButtons; i++) {
-  	btn2 = btn2 | (gpio_get(i) << i);
-    }
     i++;
-    if(i == 4096) {
+    if(i == 4096){
+      break;
+    }
+    if(s[i-1] == ';'){
+      i--;
       break;
     }
   }
