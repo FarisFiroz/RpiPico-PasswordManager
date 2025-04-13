@@ -34,6 +34,9 @@
 
 #include "hardware/uart.h"
 
+// totp header file
+#include "totp.h"
+
 #define UART_ID uart0
 #define BAUD_RATE 115200
 #define UART_TX_PIN 16
@@ -70,15 +73,46 @@ char myData1[4096];
 
 static uint32_t blink_interval_ms = BLINK_NOT_MOUNTED;
 
+// Time variables
+uint32_t unix_time;
+uint32_t start_time_ms = 0;
+
+
+// --- TOTP Variables ---
+// Maximum secret length for TOTP configuration
+#define SECRET_MAX 32
+// Global Base32 secret for TOTP generation (default value)
+char base32_secret[SECRET_MAX] = "JBSWY3DPEHPK3PXP";
+volatile bool new_secret_programmed = false;
+
 void led_blinking_task(void);
 void lock_check_task(void);
 void gpio_task(void);
 void storeString();
 void readString();
 
+// TOTP task: generates and sends a TOTP code periodically.
+void totp_task(void) {
+  uint32_t elapsed_time_ms = board_millis() - start_time_ms;
+  uint32_t current_time = unix_time + (elapsed_time_ms / 1000);
+
+  char otp[10] = {0};
+  int time_remaining = 0;
+  if (totp(current_time, base32_secret, 30, 6, otp, sizeof(otp), &time_remaining) == 0) {
+      printf("TOTP: %s, valid for %d seconds\n", otp, time_remaining);
+      // Optionally, send the OTP via USB HID:
+      // (We call a function similar to send_string_via_hid below.)
+      // send_string_via_hid(otp);
+  } else {
+      printf("Error generating TOTP\n");
+  }
+}
+
 /*------------- MAIN -------------*/
 int main(void)
 {
+ //added for init
+ stdio_init_all();
 
  uart_init(UART_ID, BAUD_RATE);
  gpio_set_function(UART_TX_PIN, UART_FUNCSEL_NUM(UART_ID, UART_TX_PIN));
@@ -115,6 +149,8 @@ int main(void)
 
   while (1)
   {
+    tud_task(); // Process USB tasks
+    
     while (!authorizedPass) {
         //Cycles through to check for button press, blinks if there is input
         for (int i = 0; i < numButtons; i++) {
@@ -197,7 +233,8 @@ void tud_resume_cb(void)
 void lock_check_task(void) {
   uint32_t const btn = board_button_read();
   if(btn) {
-  	authorizedPass = false;
+	blink_interval_ms = BLINK_MOUNTED;
+	userChosen = 0;
   }
 }
 
@@ -230,6 +267,7 @@ void programmer(uint32_t btn) {
 
   char s[4096];
   int i=0;
+
   while(1) {
     s[i] = uart_getc(UART_ID);
     i++;
@@ -242,9 +280,14 @@ void programmer(uint32_t btn) {
     }
   }
 
-  s[i] = '\0';
-  strcpy(myData1, s);
-  storeString();
+  if(btn == 2) {
+    start_time_ms = board_millis();
+    unix_time = atoi(s);
+  } else {
+    s[i] = '\0';
+    strcpy(myData1, s);
+    storeString(); 
+  }
 }
 //--------------------------------------------------------------------+
 // USB HID
@@ -380,6 +423,8 @@ void gpio_task(void) {
 	usePass = true;
 	readString();
         send_multiple_keys(myData);
+  } else if (btn==32 && (userChosen != 0)) {
+	totp_task();
   } else if (btn==16 && (userChosen != 0)) {
         gpio_put(PICO_DEFAULT_LED_PIN, 0);
 	usePass = false;
@@ -389,6 +434,10 @@ void gpio_task(void) {
         gpio_put(PICO_DEFAULT_LED_PIN, 0);
 	usePass = true;
         programmer(btn);
+        gpio_put(PICO_DEFAULT_LED_PIN, 1);
+  } else if (btn==2 && (userChosen != 0)) {
+        gpio_put(PICO_DEFAULT_LED_PIN, 0);
+	programmer(btn);
         gpio_put(PICO_DEFAULT_LED_PIN, 1);
   }
 }
